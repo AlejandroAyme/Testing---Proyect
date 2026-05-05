@@ -1,10 +1,9 @@
-from flask import Flask, render_template, request, redirect, session, url_for
+from flask import Flask, render_template, request, redirect, session, url_for, abort
 from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = "clave_secreta"
 
-# -------- CONFIGURACIÓN --------
 FECHA_INICIO = datetime(2026, 4, 1)
 FECHA_FIN = datetime(2026, 6, 30)
 MAX_NOTAS = 3
@@ -19,15 +18,11 @@ estudiantes = {
     "2": {"nombre": "Adrian SantaCruz", "notas": []}
 }
 
-# -------- FUNCIONES --------
-
 def usuario_logueado():
     return "usuario" in session
 
-
 def estado_plazo():
     ahora = datetime.now()
-
     if ahora < FECHA_INICIO:
         return "no_iniciado"
     elif FECHA_INICIO <= ahora <= FECHA_FIN:
@@ -35,47 +30,40 @@ def estado_plazo():
     else:
         return "finalizado"
 
-
 def calcular_promedio(codigo):
     notas = estudiantes[codigo]["notas"]
-
     if not notas:
         return 0
-
     valores = []
     for n in notas:
         if n["valor"] == "NSP":
             valores.append(0)
         else:
             valores.append(float(n["valor"]))
-
     return sum(valores) / len(valores)
 
-
-# -------- RUTAS --------
+@app.before_request
+def proteger_rutas():
+    rutas_protegidas = ["/menu", "/registrar", "/historial", "/editar", "/eliminar"]
+    if any(request.path.startswith(r) for r in rutas_protegidas):
+        if not usuario_logueado():
+            return redirect(url_for("login"))
 
 @app.route("/", methods=["GET", "POST"])
 def login():
     error = None
-
     if request.method == "POST":
-        user = request.form["usuario"]
-        password = request.form["password"]
-
+        user = request.form.get("usuario", "").strip()
+        password = request.form.get("password", "").strip()
         if user in usuarios and usuarios[user] == password:
             session["usuario"] = user
             return redirect(url_for("menu"))
         else:
             error = "Credenciales incorrectas"
-
     return render_template("login.html", error=error)
-
 
 @app.route("/menu")
 def menu():
-    if not usuario_logueado():
-        return redirect(url_for("login"))
-
     return render_template(
         "menu.html",
         estudiantes=estudiantes,
@@ -84,17 +72,13 @@ def menu():
         estado=estado_plazo()
     )
 
-
 @app.route("/registrar", methods=["POST"])
 def registrar_nota():
-    if not usuario_logueado():
-        return redirect(url_for("login"))
-
     if estado_plazo() != "activo":
-        return "⛔ Fuera del periodo de registro"
+        return "Fuera del periodo de registro"
 
-    codigo = request.form["codigo"]
-    nota = request.form["nota"].upper()
+    codigo = request.form.get("codigo", "").strip()
+    nota = request.form.get("nota", "").strip().upper()
 
     if codigo not in estudiantes:
         return "Estudiante no existe"
@@ -102,40 +86,29 @@ def registrar_nota():
     estudiante = estudiantes[codigo]
 
     if len(estudiante["notas"]) >= MAX_NOTAS:
-        return "⚠️ Máximo de 3 notas alcanzado"
+        return "Máximo de 3 notas alcanzado"
 
-    # ---- NSP ----
     if nota == "NSP":
         estudiante["notas"].append({"valor": "NSP"})
         return redirect(url_for("menu"))
 
-    # ---- NOTA NUMÉRICA ----
     try:
-        nota = float(nota)
-
-        if nota < 0 or nota > 20:
+        nota_valor = float(nota)
+        if nota_valor < 0 or nota_valor > 20:
             return "Nota fuera de rango (0-20)"
-
-        estudiante["notas"].append({"valor": nota})
-
-    except ValueError:
+        estudiante["notas"].append({"valor": nota_valor})
+    except:
         return "Ingrese un número o NSP"
 
     return redirect(url_for("menu"))
 
-
 @app.route("/historial/<codigo>")
 def historial(codigo):
-    if not usuario_logueado():
-        return redirect(url_for("login"))
-
     if codigo not in estudiantes:
         return "Estudiante no existe"
-
     estudiante = estudiantes[codigo]
     promedio = calcular_promedio(codigo)
     estado = "Aprobado" if promedio >= 11 else "Desaprobado"
-
     return render_template(
         "historial.html",
         estudiante=estudiante,
@@ -144,36 +117,28 @@ def historial(codigo):
         estado=estado
     )
 
-
 @app.route("/editar/<codigo>/<int:index>", methods=["GET", "POST"])
 def editar_nota(codigo, index):
-    if not usuario_logueado():
-        return redirect(url_for("login"))
-
     if codigo not in estudiantes:
         return "Estudiante no existe"
 
     notas = estudiantes[codigo]["notas"]
 
-    # validación segura de índice
     if index < 0 or index >= len(notas):
         return "Índice inválido"
 
     if request.method == "POST":
-        nueva = request.form["nota"].upper()
+        nueva = request.form.get("nota", "").strip().upper()
 
         if nueva == "NSP":
             notas[index] = {"valor": "NSP"}
         else:
             try:
-                nueva = float(nueva)
-
-                if nueva < 0 or nueva > 20:
+                nueva_valor = float(nueva)
+                if nueva_valor < 0 or nueva_valor > 20:
                     return "Fuera de rango"
-
-                notas[index] = {"valor": nueva}
-
-            except ValueError:
+                notas[index] = {"valor": nueva_valor}
+            except:
                 return "Valor inválido"
 
         return redirect(url_for("historial", codigo=codigo))
@@ -185,18 +150,13 @@ def editar_nota(codigo, index):
         nota=notas[index]["valor"]
     )
 
-
 @app.route("/eliminar/<codigo>/<int:index>")
 def eliminar_nota(codigo, index):
-    if not usuario_logueado():
-        return redirect(url_for("login"))
-
     if codigo not in estudiantes:
         return "Estudiante no existe"
 
     notas = estudiantes[codigo]["notas"]
 
-    # validación segura
     if index < 0 or index >= len(notas):
         return "Índice inválido"
 
@@ -204,14 +164,10 @@ def eliminar_nota(codigo, index):
 
     return redirect(url_for("historial", codigo=codigo))
 
-
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login"))
-
-
-# -------- RUN --------
 
 if __name__ == "__main__":
     app.run(debug=True)
